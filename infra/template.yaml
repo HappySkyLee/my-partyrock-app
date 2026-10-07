@@ -8,11 +8,6 @@ Globals:
     Timeout: 60
     MemorySize: 256
 
-Parameters:
-  AccountId:
-    Type: String
-    Default: !Sub "${AWS::AccountId}"
-
 Resources:
 
   # ── IAM Role ──────────────────────────────────────────────────────────────
