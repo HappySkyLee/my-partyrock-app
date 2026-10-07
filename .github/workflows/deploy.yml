@@ -1,0 +1,97 @@
+name: Deploy Lecture Slide Exam Question Generator
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build and Deploy to AWS
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Configure AWS credentials ─────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ap-southeast-1
+
+      # ── 3. Set up Python 3.12 ────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ── 4. Set up AWS SAM CLI ────────────────────────────────────────────
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      # ── 5. SAM Build ─────────────────────────────────────────────────────
+      - name: SAM Build
+        run: sam build --template infra/template.yaml
+
+      # ── 6. SAM Deploy ────────────────────────────────────────────────────
+      - name: SAM Deploy
+        run: |
+          sam deploy \
+            --stack-name lecture-slide-exam-question-generator \
+            --s3-bucket ${{ secrets.SAM_DEPLOY_BUCKET }} \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --region ap-southeast-1 \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
+
+      # ── 7. Read CloudFormation outputs ───────────────────────────────────
+      - name: Read CloudFormation outputs
+        id: cfn
+        run: |
+          get_output() {
+            aws cloudformation describe-stacks \
+              --stack-name lecture-slide-exam-question-generator \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+              --output text
+          }
+
+          QUESTIONS_URL=$(get_output QuestionsUrl)
+          BUCKET_NAME=$(get_output BucketName)
+          WEBSITE_URL=$(get_output WebsiteUrl)
+
+          echo "questions_url=$QUESTIONS_URL" >> "$GITHUB_OUTPUT"
+          echo "bucket_name=$BUCKET_NAME"     >> "$GITHUB_OUTPUT"
+          echo "website_url=$WEBSITE_URL"     >> "$GITHUB_OUTPUT"
+
+          echo "✅ Questions URL : $QUESTIONS_URL"
+          echo "✅ S3 Bucket     : $BUCKET_NAME"
+          echo "✅ Website URL   : $WEBSITE_URL"
+
+      # ── 8. Inject Lambda URLs into frontend HTML ──────────────────────────
+      - name: Inject Lambda URLs into frontend/index.html
+        run: |
+          sed -i "s|URL_QUESTIONS|${{ steps.cfn.outputs.questions_url }}|g" frontend/index.html
+
+      # ── 9. Upload frontend to S3 ──────────────────────────────────────────
+      - name: Upload frontend to S3
+        run: |
+          aws s3 sync frontend/ s3://${{ steps.cfn.outputs.bucket_name }}/ \
+            --cache-control no-cache \
+            --delete
+
+      # ── 10. Print deployment summary ──────────────────────────────────────
+      - name: Deployment summary
+        run: |
+          echo ""
+          echo "============================================"
+          echo "  🎉 Deployment complete!"
+          echo "============================================"
+          echo "  App URL : ${{ steps.cfn.outputs.website_url }}"
+          echo "============================================"
