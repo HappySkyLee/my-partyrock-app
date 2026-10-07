@@ -22,6 +22,15 @@ def options():
 
 @app.route("/", methods=["POST"])
 def generate_questions():
+        # Validate API key
+    incoming_key = request.headers.get("x-api-key", "")
+    if incoming_key != API_KEY:
+        return Response(
+            "Unauthorized",
+            status=401,
+            headers=CORS_HEADERS,
+        )
+
     body = request.get_json(force=True)
 
     subject = body.get("subject", "")
