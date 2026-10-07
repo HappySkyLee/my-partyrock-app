@@ -380,14 +380,14 @@
   <!-- ── Widget 4: File Upload ── -->
   <div class="card">
     <div class="card-label">Widget 4</div>
-    <h2>📎 Lecture Slides <span style="color:var(--error);font-size:0.85rem">*required</span></h2>
+    <h2>📎 Lecture Slides <span style="color:var(--muted);font-weight:400;font-size:0.85rem">(optional — PDF, JPG, PNG, WEBP supported)</span></h2>
     <div class="dropzone" id="dropzone">
       <input type="file" id="file_input"
              accept=".jpg,.jpeg,.png,.webp,.pdf,.docx,.pptx,image/jpeg,image/png,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation" />
       <div class="dropzone-icon">📂</div>
       <div class="dropzone-text">
         <strong>Click to browse</strong> or drag &amp; drop your file here<br/>
-        <span style="font-size:0.82rem">JPG, PNG, WEBP, PDF, DOCX, PPTX</span>
+        <span style="font-size:0.82rem">PDF, JPG, PNG, WEBP · DOCX/PPTX not supported by Bedrock</span>
       </div>
       <div id="file_badge_wrap"></div>
     </div>
@@ -454,28 +454,53 @@ fileInput.addEventListener('change', () => {
 });
 
 function handleFile(file) {
+  // Guard: base64 is ~33% larger; Lambda Function URL limit is 6MB
+  const MAX_RAW_BYTES = 4 * 1024 * 1024; // 4 MB raw → ~5.3 MB base64
+  if (file.size > MAX_RAW_BYTES) {
+    alert(`File is too large (${(file.size/1024/1024).toFixed(1)} MB). Please use a file under 4 MB so it fits within Lambda's 6 MB payload limit.`);
+    fileInput.value = '';
+    return;
+  }
   const reader = new FileReader();
   reader.onload = ev => {
-    const dataUrl = ev.target.result; // "data:<mime>;base64,<b64>"
+    const dataUrl  = ev.target.result;       // "data:<mime>;base64,<b64>"
     const commaIdx = dataUrl.indexOf(',');
     fileBase64 = dataUrl.slice(commaIdx + 1);
     fileMime   = file.type || guessMime(file.name);
-    renderBadge(file.name);
+    renderBadge(file.name, fileMime);
   };
   reader.readAsDataURL(file);
 }
 
 function guessMime(name) {
   const ext = name.split('.').pop().toLowerCase();
-  const map = { pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-                jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+  const map = {
+    pdf:  'application/pdf',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    jpg:  'image/jpeg', jpeg: 'image/jpeg',
+    png:  'image/png',
+    webp: 'image/webp',
+  };
   return map[ext] || 'application/octet-stream';
 }
 
-function renderBadge(name) {
+// MIME types Bedrock actually accepts
+const SUPPORTED_MIMES = new Set([
+  'application/pdf',
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+]);
+
+function renderBadge(name, mime) {
   const wrap = document.getElementById('file_badge_wrap');
-  wrap.innerHTML = `<div class="file-badge">📄 ${escHtml(name)} <span class="remove-file" onclick="clearFile()">✕</span></div>`;
+  const unsupported = !SUPPORTED_MIMES.has(mime);
+  const warn = unsupported
+    ? `<span style="color:var(--error);font-size:0.78rem;display:block;margin-top:4px">
+        ⚠️ DOCX/PPTX are not supported by Bedrock — questions will be generated from subject/topics only.
+       </span>`
+    : '';
+  wrap.innerHTML = `<div class="file-badge">📄 ${escHtml(name)}
+    <span class="remove-file" onclick="clearFile()">✕</span></div>${warn}`;
 }
 
 function clearFile() {
@@ -557,7 +582,7 @@ async function streamToPanel(url, body, outputId, spinnerId, errorId, badgeId, s
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { headers: {
+      headers: {
         'Content-Type': 'application/json',
         'x-api-key': API_KEY,
       },
@@ -583,12 +608,29 @@ async function streamToPanel(url, body, outputId, spinnerId, errorId, badgeId, s
       buffer = lines.pop(); // keep incomplete last piece
 
       for (const line of lines) {
+        // Detect backend error markers streamed in the body
+        if (/^\[(?:ERROR|BEDROCK ERROR|VALIDATION ERROR|ACCESS DENIED)\]/.test(line.trim())) {
+          spinnerEl.style.display = 'none';
+          badgeEl.className = 'status-badge';
+          badgeEl.style.display = 'none';
+          errorEl.style.display = 'block';
+          errorEl.textContent = `⚠️ ${line.trim()}`;
+          return;
+        }
         appendLine(renderMdLine(line));
       }
     }
 
     // Flush remaining buffer
     if (buffer.length > 0) {
+      if (/^\[(?:ERROR|BEDROCK ERROR|VALIDATION ERROR|ACCESS DENIED)\]/.test(buffer.trim())) {
+        spinnerEl.style.display = 'none';
+        badgeEl.className = 'status-badge';
+        badgeEl.style.display = 'none';
+        errorEl.style.display = 'block';
+        errorEl.textContent = `⚠️ ${buffer.trim()}`;
+        return;
+      }
       appendLine(renderMdLine(buffer));
     }
 
@@ -619,24 +661,23 @@ async function runAll() {
     alert('Please enter a subject before generating questions.');
     return;
   }
-  if (!fileBase64) {
-    alert('Please upload your lecture slides — the file is required.');
-    return;
-  }
 
   const btn = document.getElementById('run_btn');
   btn.disabled = true;
   btn.innerHTML = '<span style="display:inline-block;animation:spin 0.8s linear infinite">⟳</span> Generating…';
 
+  // File is optional — include only if a supported file was loaded
   const body = {
     subject,
     focus_topics,
     difficulty,
     num_questions,
     question_type,
-    file_data: fileBase64,
-    file_mime: fileMime,
   };
+  if (fileBase64 && fileMime) {
+    body.file_data = fileBase64;
+    body.file_mime = fileMime;
+  }
 
   await streamToPanel(
     STREAM_URLS.questions,
