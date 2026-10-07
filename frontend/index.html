@@ -431,6 +431,8 @@ const STREAM_URLS = {
   questions: 'https://a4ruyw62fvrsgljafo6j5h57kq0wxhmr.lambda-url.ap-southeast-1.on.aws/',
 };
 
+const API_KEY = '23h1h3v1hbvhEgwqhij31sdasSsghvswp';
+
 /* ─── File state ─── */
 let fileBase64 = '';
 let fileMime   = '';
@@ -555,7 +557,10 @@ async function streamToPanel(url, body, outputId, spinnerId, errorId, badgeId, s
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY,
+      },
       body: JSON.stringify(body),
     });
 
